@@ -1,5 +1,6 @@
 # Shaheer Ahmed (k190233) - 4F - ToA A3 - Q5
 
+from itertools import product
 from statemachine import StateMachine, State, Transition
 import json
 from PySimpleAutomata import automata_IO
@@ -10,6 +11,8 @@ class FiniteAutomata:
 		self.states = {}
 		self.transitions = {}
 		self.initialState = None
+		self.acceptingStates = []
+		self.tokens = []
 		self.jsonDump = {
 			"alphabet": [],
 			"states": [],
@@ -17,6 +20,133 @@ class FiniteAutomata:
 			"accepting_states": [],
 			"transitions": [],
 		}
+		self.inversedTransitions = {}
+
+	def inverseTransitions(self):
+		self.inversedTransitions.clear()
+
+		for fromState in self.transitions:
+			for token in self.transitions[fromState]:
+				toState = self.transitions[fromState][token]["nextState"]
+					
+				if toState not in self.inversedTransitions:
+					self.inversedTransitions[toState] = {}
+
+				for t in self.tokens:
+					if t not in self.inversedTransitions[toState]:
+						self.inversedTransitions[toState][t] = list()
+
+				self.inversedTransitions[toState][token].append(fromState)
+
+		# for state in self.states:
+		# 	if state not in self.inversedTransitions:
+		# 		self.inversedTransitions[state] = {}
+			
+		# 		for token in self.tokens:
+		# 			if token not in self.inversedTransitions[state]:
+		# 				self.inversedTransitions[state][token] = list()
+
+	def buildMatrix(self):
+		self.inverseTransitions()
+		# works like a nested-loop, creates a dict with row = self.states[i], col = self.states[j], initially unmarked (0)
+		statesList = list(self.states.keys())
+		matrix = dict([((statesList[i], statesList[j]), 0) for i, j in product(range(len(statesList)), range(len(statesList)))])
+		queue = list()
+
+		for stateA in statesList:
+			for finalState in self.acceptingStates:
+				if stateA not in self.acceptingStates:
+					matrix[(stateA, finalState)] = 1
+					matrix[(finalState, stateA)] = 1
+					queue.append((stateA, finalState))
+		
+		while len(queue) > 0:
+			stateA, stateB = queue.pop()
+			if stateA not in self.inversedTransitions or stateB not in self.inversedTransitions:
+				continue
+
+			for token in self.tokens:
+				for stateC, stateD in product(self.inversedTransitions[stateA][token], self.inversedTransitions[stateB][token]):
+					if matrix[(stateC, stateD)] == 0:
+						queue.append((stateC, stateD))
+						matrix[(stateC, stateD)] = 1
+						matrix[(stateD, stateC)] = 1
+
+		return matrix
+
+	def tableFillingMethod(self):
+		"""
+		# remove unreachable states
+		# make a table of NxN (N = number of states)
+			# mark all diagonals in the table
+			# mark multiple occurnces of state (everything right to diagonal)
+			# for each cell, check both states represented by row and column
+				# check if both are non-final or both are final - do nothing
+				# check if one of them is final - then mark that cell
+			# in second iteration over each cell
+				# for each row and column, check where each transition takes them
+					# if transition takes them to same state - ignore
+					# if transition is different - store the pair
+						# for the pair stored
+							# check the table cell representing it
+								# if that cell is marked then mark the states cell it came from
+								# else do not mark
+		"""
+		matrix = self.buildMatrix()
+
+		finalStates = set()
+		oldTransitions = {}
+		minimizedStates = []
+
+		for state in self.states:
+			if state in finalStates:
+				continue
+
+			finalStates.add(state)
+			minimizedState = state + "'" # call it statePrime
+			minimizedStates.append(minimizedState)
+
+			for stateB in self.states:
+				if matrix[(state, stateB)] == 0:
+					finalStates.add(stateB)
+					oldTransitions[stateB] = minimizedState
+
+		newFinalStates = set([oldTransitions[s] for s in self.acceptingStates])
+
+		for s in self.acceptingStates:
+			newFinalStates.add(oldTransitions[s])
+
+		newInitialState = oldTransitions[self.initialState]
+
+		newTransitions = {}
+		for fromState in self.transitions:
+			if oldTransitions[fromState] not in newTransitions:
+				newTransitions[oldTransitions[fromState]] = {}
+
+			for token in self.transitions[fromState]:
+				newTransitions[oldTransitions[fromState]][token] = oldTransitions[self.transitions[fromState][token]["nextState"]]
+	
+		for token in self.tokens:
+			self.jsonDump["alphabet"].append(token)
+		
+		for state in minimizedStates:
+			self.jsonDump["states"].append(state)
+
+		self.jsonDump["initial_states"].append(newInitialState)
+		self.jsonDump["initial_state"] = self.jsonDump["initial_states"][0]
+
+		for fState in newFinalStates:
+			self.jsonDump["accepting_states"].append(fState)
+
+		for fromState in newTransitions:
+			for token in newTransitions[fromState]:
+				self.jsonDump["transitions"].append([fromState, token, newTransitions[fromState][token]])
+
+		self.visualize("./dfa_min.json", "minimized_dfa", "./", buildFA = False)
+
+		# self.initialState = newInitialStates
+		# self.acceptingStates = newFinalStates
+		# self.statesList = minimizedStates
 
 	def transition(self, fromState = None, token = None):
 		# TODO: null checks
@@ -36,6 +166,8 @@ class FiniteAutomata:
 
 		if (stateName not in self.states):
 			self.states[stateName] = state
+			if stateName not in self.acceptingStates and state.value:
+				self.acceptingStates.append(stateName)
 		
 	def addTransition(self, fromState = None, toState = None, token = None):
 		# TODO: null checks
@@ -55,6 +187,9 @@ class FiniteAutomata:
 			"nextState": toState,
 			"transitioner": (self.getState(fromState)).to((self.getState(toState))),
 		}
+
+		if token not in self.tokens:
+			self.tokens.append(token)
 
 	def getState(self, stateName = None):
 		# TODO: null checks
@@ -109,11 +244,17 @@ class FiniteAutomata:
 
 		automata_IO.dfa_to_dot(dfa, dfaName, svgPath)
 
-	def visualize(self, dfaPath = None, dfaName = None, svgPath = None):
+	def visualize(self, dfaPath = None, dfaName = None, svgPath = None, buildFA = True):
 		if dfaPath is None or dfaName is None or svgPath is None:
 			return
 
-		self.buildFA()
+		if buildFA:
+			self.jsonDump["alphabet"].clear()
+			self.jsonDump["states"].clear()
+			self.jsonDump["initial_states"].clear()
+			self.jsonDump["accepting_states"].clear()
+			self.jsonDump["transitions"].clear()
+			self.buildFA()
 		self.dumpJson(dfaPath)
 		self.getFormattedDFA(dfaPath)
 		self.saveSVG(dfaPath, dfaName, svgPath)
@@ -193,6 +334,9 @@ FA.addTransition("q8", "q3", "b")
 
 FA.addTransition("q9", "q7", "a")
 FA.addTransition("q9", "q8", "b")
+
+# minimize DFA
+FA.tableFillingMethod()
 
 # visualizes the DFA constructed
 FA.visualize("./dfa.json", "DFA", "./")
